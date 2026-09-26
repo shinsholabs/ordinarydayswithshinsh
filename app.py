@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
 from html import escape
 from io import BytesIO
+import json
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -66,7 +66,7 @@ def load_articles(file_bytes: bytes) -> pd.DataFrame:
 
 @st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
 def first_article_image(article_url: str) -> str | None:
-    """Find the leading article photo, with Open Graph as a reliable fallback."""
+    """Find the publisher-designated article photo before inspecting body images."""
     try:
         response = requests.get(
             article_url,
@@ -78,8 +78,43 @@ def first_article_image(article_url: str) -> str | None:
         return None
 
     soup = BeautifulSoup(response.text, "html.parser")
+
+    # Publishers normally set this to the actual lead photo used when an article
+    # is shared on KakaoTalk, Naver and social networks. It is much more reliable
+    # than the first <img>, which can be a logo, an advert, or a related-story image.
+    for selector, attribute in (
+        ('meta[property="og:image"]', "content"),
+        ('meta[name="twitter:image"]', "content"),
+        ('meta[name="twitter:image:src"]', "content"),
+        ('link[rel="image_src"]', "href"),
+    ):
+        tag = soup.select_one(selector)
+        if tag and tag.get(attribute):
+            return urljoin(article_url, tag[attribute])
+
+    # Some news sites provide the lead image only as schema.org Article data.
+    for script in soup.select('script[type="application/ld+json"]'):
+        try:
+            payload = json.loads(script.string or script.get_text())
+        except (json.JSONDecodeError, TypeError):
+            continue
+        records = payload if isinstance(payload, list) else [payload]
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            if "@graph" in record and isinstance(record["@graph"], list):
+                records.extend(record["@graph"])
+                continue
+            image = record.get("image")
+            if isinstance(image, list) and image:
+                image = image[0]
+            if isinstance(image, dict):
+                image = image.get("url") or image.get("contentUrl")
+            if isinstance(image, str) and image:
+                return urljoin(article_url, image)
+
     candidates = []
-    # Article-content selectors are checked first so logos and navigation images are skipped.
+    # Last-resort fallback for publishers that do not expose a representative image.
     for selector in ("article img", ".article-body img", ".article_view img", ".view_content img", ".news_view img", ".content img"):
         candidates.extend(soup.select(selector))
     candidates.extend(soup.find_all("img"))
@@ -93,9 +128,6 @@ def first_article_image(article_url: str) -> str | None:
             continue
         return urljoin(article_url, src)
 
-    og_image = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
-    if og_image and og_image.get("content"):
-        return urljoin(article_url, og_image["content"])
     return None
 
 
@@ -115,8 +147,6 @@ def display_cards(articles: pd.DataFrame) -> None:
                     )
                 else:
                     st.markdown(f'<a class="no-image" href="{safe_url}" target="_blank">사진을 불러올 수 없습니다</a>', unsafe_allow_html=True)
-                time_text = "" if pd.isna(article["시간"]) else f" · {str(article["시간"])}"
-                st.caption(f'{article["매체명"]}{time_text}')
                 st.markdown(f'<a class="article-title" href="{safe_url}" target="_blank">{safe_title}</a>', unsafe_allow_html=True)
 
 
@@ -128,12 +158,11 @@ st.markdown(
     .no-image {color: #777 !important; padding: 45% 1rem 0; text-align: center; font-size: .8rem;}
     .article-title {display: block; color: #171717 !important; font-size: .93rem; line-height: 1.45; text-decoration: none; margin: -0.25rem 0 1.6rem;}
     .article-title:hover {text-decoration: underline;}
-    [data-testid="stCaptionContainer"] {font-size: .72rem; color: #777; margin-top: .45rem;}
     </style>""",
     unsafe_allow_html=True,
 )
 st.title("평범한 날들, 신승호")
-st.caption("날짜를 골라 그날의 기사를 찾아보세요. 사진 또는 제목을 누르면 원문으로 이동합니다.")
+st.caption("날짜를 고르면 같은 월·일의 모든 연도 기사가 표시됩니다. 사진 또는 제목을 누르면 원문으로 이동합니다.")
 
 if not DATA_PATH.exists():
     st.error("`data/named.xlsx` 파일을 찾을 수 없습니다. 앱 폴더 안의 `data` 폴더에 파일을 넣어 주세요.")
@@ -155,19 +184,14 @@ selected_date = st.date_input(
     help="캘린더에서 날짜를 선택하면 그날의 기사로 이동합니다.",
 )
 
-if selected_date in available_dates:
-    selected_articles = articles[articles["날짜"].dt.date == selected_date]
-    st.subheader(selected_date.strftime("%Y년 %m월 %d일"))
-    display_cards(selected_articles)
-else:
-    st.info(f"{selected_date.strftime('%Y년 %m월 %d일')}에 등록된 기사가 없습니다. 아래에서 전체 기록을 볼 수 있어요.")
+selected_articles = articles[
+    (articles["날짜"].dt.month == selected_date.month)
+    & (articles["날짜"].dt.day == selected_date.day)
+]
 
-st.divider()
-st.subheader("전체 기록")
-years = sorted(articles["연도"].unique())
-selected_year = st.selectbox("연도별 보기", years, index=years.index(selected_date.year) if selected_date.year in years else 0)
-year_articles = articles[articles["연도"] == selected_year]
-st.header(f"{selected_year}년")
-for day, day_articles in year_articles.groupby("날짜", sort=True):
-    st.markdown(f"#### {day.strftime('%m월 %d일')}")
-    display_cards(day_articles)
+if not selected_articles.empty:
+    for year, year_articles in selected_articles.groupby("연도", sort=True):
+        st.subheader(f"{year}년 {selected_date.month}월 {selected_date.day}일")
+        display_cards(year_articles)
+else:
+    st.info(f"{selected_date.month}월 {selected_date.day}일에 등록된 기사가 없습니다.")
