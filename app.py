@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from html import escape
 from io import BytesIO
 import json
 from pathlib import Path
 from urllib.parse import urljoin
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -12,9 +14,10 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 
-st.set_page_config(page_title="평범한 날들, 신승호", page_icon="🗓️", layout="centered")
+st.set_page_config(page_title="평범한 날에, 신승호", page_icon="🗓️", layout="centered")
 
 DATA_PATH = Path(__file__).parent / "data" / "named.xlsx"
+ALL_DATA_PATH = Path(__file__).parent / "data" / "all.xlsx"
 REQUIRED_COLUMNS = ["날짜", "시간", "매체명", "제목", "url"]
 
 
@@ -35,14 +38,16 @@ def _normalise_columns(frame: pd.DataFrame) -> pd.DataFrame | None:
 
 
 @st.cache_data(show_spinner=False)
-def load_articles(file_bytes: bytes) -> pd.DataFrame:
-    """Read every article sheet, including workbooks whose NAMED sheet has no header."""
+def load_articles(file_bytes: bytes, preferred_sheet: str | None = None) -> pd.DataFrame:
+    """Read a preferred article sheet, or combine all usable sheets."""
     workbook = pd.ExcelFile(BytesIO(file_bytes))
     frames: list[pd.DataFrame] = []
 
-    # NAMED is the curated article list in the supplied workbook. If it is absent,
-    # the app falls back to collecting the remaining data sheets.
-    sheet_names = ["NAMED"] if "NAMED" in workbook.sheet_names else workbook.sheet_names
+    sheet_names = (
+        [preferred_sheet]
+        if preferred_sheet and preferred_sheet in workbook.sheet_names
+        else workbook.sheet_names
+    )
     for sheet in sheet_names:
         raw = pd.read_excel(workbook, sheet_name=sheet, header=None)
         if raw.empty or raw.shape[1] < 5:
@@ -59,7 +64,11 @@ def load_articles(file_bytes: bytes) -> pd.DataFrame:
     articles = pd.concat(frames, ignore_index=True)
     articles = articles.drop_duplicates(subset=["날짜", "시간", "매체명", "제목", "url"])
     articles["시간정렬"] = pd.to_datetime(articles["시간"].astype(str), errors="coerce")
-    articles = articles.sort_values(["날짜", "시간정렬", "제목"], na_position="last")
+    articles = articles.sort_values(
+        ["날짜", "시간정렬", "제목"],
+        ascending=[False, False, False],
+        na_position="last",
+    )
     articles["연도"] = articles["날짜"].dt.year
     return articles
 
@@ -132,36 +141,56 @@ def first_article_image(article_url: str) -> str | None:
 
 
 def display_cards(articles: pd.DataFrame) -> None:
-    for index in range(0, len(articles), 2):
-        columns = st.columns(2, gap="small")
-        for column, (_, article) in zip(columns, articles.iloc[index : index + 2].iterrows()):
-            with column:
-                image_url = first_article_image(article["url"])
-                safe_url = escape(str(article["url"]), quote=True)
-                safe_title = escape(str(article["제목"]), quote=True)
-                if image_url:
-                    st.markdown(
-                        f'<a class="article-image" href="{safe_url}" target="_blank">'
-                        f'<img src="{escape(image_url, quote=True)}" alt="{safe_title}" loading="lazy"></a>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(f'<a class="no-image" href="{safe_url}" target="_blank">사진을 불러올 수 없습니다</a>', unsafe_allow_html=True)
-                st.markdown(f'<a class="article-title" href="{safe_url}" target="_blank">{safe_title}</a>', unsafe_allow_html=True)
+    cards = []
+    for _, article in articles.iterrows():
+        image_url = first_article_image(article["url"])
+        safe_url = escape(str(article["url"]), quote=True)
+        safe_title = escape(str(article["제목"]), quote=True)
+        if image_url:
+            image = (
+                f'<a class="article-image" href="{safe_url}" target="_blank">'
+                f'<img src="{escape(image_url, quote=True)}" alt="{safe_title}" loading="lazy"></a>'
+            )
+        else:
+            image = f'<a class="no-image" href="{safe_url}" target="_blank">사진을 불러올 수 없습니다</a>'
+        cards.append(
+            f'<article class="article-card">{image}'
+            f'<a class="article-title" href="{safe_url}" target="_blank">{safe_title}</a></article>'
+        )
+    st.markdown(f'<section class="article-grid">{"".join(cards)}</section>', unsafe_allow_html=True)
+
+
+def display_title_links(articles: pd.DataFrame) -> None:
+    links = []
+    for _, article in articles.iterrows():
+        safe_url = escape(str(article["url"]), quote=True)
+        safe_title = escape(str(article["제목"]), quote=True)
+        links.append(
+            f'<li><a class="more-title" href="{safe_url}" target="_blank">{safe_title}</a></li>'
+        )
+    st.markdown(f'<ul class="more-list">{"".join(links)}</ul>', unsafe_allow_html=True)
 
 
 st.markdown(
     """<style>
     .block-container {max-width: 760px; padding-top: 2.2rem; padding-bottom: 4rem;}
     h1 {letter-spacing: -0.06em; margin-bottom: 0.2rem;}
+    .site-subtitle {font-size: 1rem; color: #777; margin: -.35rem 0 1.4rem; letter-spacing: .01em;}
+    .article-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; align-items: start;}
+    .article-card {min-width: 0;}
     .article-image img, .no-image {width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; border-radius: 5px; background: #efefeb;}
     .no-image {color: #777 !important; padding: 45% 1rem 0; text-align: center; font-size: .8rem;}
-    .article-title {display: block; color: #171717 !important; font-size: .93rem; line-height: 1.45; text-decoration: none; margin: -0.25rem 0 1.6rem;}
-    .article-title:hover {text-decoration: underline;}
+    .article-title {display: block; color: #171717 !important; font-size: .93rem; line-height: 1.45; text-decoration: none !important; margin: .45rem 0 1.6rem;}
+    .article-title:hover, .article-title:focus, .article-title:visited {text-decoration: none !important;}
+    .more-list {list-style: none; padding: 0; margin: .35rem 0 1.5rem;}
+    .more-list li {padding: .7rem 0; border-bottom: 1px solid #ececea;}
+    .more-title {color: #171717 !important; font-size: .93rem; line-height: 1.5; text-decoration: none !important;}
+    .more-title:hover, .more-title:focus, .more-title:visited {text-decoration: none !important;}
     </style>""",
     unsafe_allow_html=True,
 )
-st.title("평범한 날들, 신승호")
+st.title("평범한 날에, 신승호")
+st.markdown('<p class="site-subtitle">Ordinary days with SHIN SEUNGHO</p>', unsafe_allow_html=True)
 st.caption("날짜를 고르면 같은 월·일의 모든 연도 기사가 표시됩니다. 사진 또는 제목을 누르면 원문으로 이동합니다.")
 
 if not DATA_PATH.exists():
@@ -169,18 +198,20 @@ if not DATA_PATH.exists():
     st.stop()
 
 try:
-    articles = load_articles(DATA_PATH.read_bytes())
+    articles = load_articles(DATA_PATH.read_bytes(), preferred_sheet="NAMED")
 except Exception as exc:
     st.error(f"엑셀 파일을 읽지 못했습니다: {exc}")
     st.stop()
 
 available_dates = set(articles["날짜"].dt.date)
-default_date = max(available_dates)
+today_kst = datetime.now(ZoneInfo("Asia/Seoul")).date()
+calendar_min = min(min(available_dates), today_kst)
+calendar_max = max(max(available_dates), today_kst)
 selected_date = st.date_input(
     "날짜 선택",
-    value=default_date,
-    min_value=min(available_dates),
-    max_value=max(available_dates),
+    value=today_kst,
+    min_value=calendar_min,
+    max_value=calendar_max,
     help="캘린더에서 날짜를 선택하면 그날의 기사로 이동합니다.",
 )
 
@@ -190,8 +221,25 @@ selected_articles = articles[
 ]
 
 if not selected_articles.empty:
-    for year, year_articles in selected_articles.groupby("연도", sort=True):
+    for year, year_articles in selected_articles.groupby("연도", sort=False):
         st.subheader(f"{year}년 {selected_date.month}월 {selected_date.day}일")
         display_cards(year_articles)
 else:
     st.info(f"{selected_date.month}월 {selected_date.day}일에 등록된 기사가 없습니다.")
+
+if st.toggle("더보기"):
+    if not ALL_DATA_PATH.exists():
+        st.info("`data/all.xlsx` 파일을 찾을 수 없습니다.")
+    else:
+        try:
+            all_articles = load_articles(ALL_DATA_PATH.read_bytes(), preferred_sheet="ALL")
+            more_articles = all_articles[
+                (all_articles["날짜"].dt.month == selected_date.month)
+                & (all_articles["날짜"].dt.day == selected_date.day)
+            ]
+            if more_articles.empty:
+                st.info(f"{selected_date.month}월 {selected_date.day}의 추가 기사가 없습니다.")
+            else:
+                display_title_links(more_articles)
+        except Exception as exc:
+            st.error(f"전체 기사 엑셀 파일을 읽지 못했습니다: {exc}")
