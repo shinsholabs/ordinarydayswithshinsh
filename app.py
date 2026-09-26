@@ -173,19 +173,25 @@ def display_title_links(articles: pd.DataFrame) -> None:
 
 st.markdown(
     """<style>
+    @import url('https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&display=swap');
     .block-container {max-width: 760px; padding-top: 2.2rem; padding-bottom: 4rem;}
+    .stApp, .stApp button, .stApp input, .stApp label {font-family: 'Gowun Batang', 'Batang', serif !important;}
     h1 {letter-spacing: -0.06em; margin-bottom: 0.2rem;}
     .site-subtitle {font-size: 1rem; color: #777; margin: -.35rem 0 1.4rem; letter-spacing: .01em;}
     .article-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; align-items: start;}
     .article-card {min-width: 0;}
     .article-image img, .no-image {width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; border-radius: 5px; background: #efefeb;}
     .no-image {color: #777 !important; padding: 45% 1rem 0; text-align: center; font-size: .8rem;}
-    .article-title {display: block; color: #171717 !important; font-size: .93rem; line-height: 1.45; text-decoration: none !important; margin: .45rem 0 1.6rem;}
+    .article-title {display: block; color: #171717 !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important; font-size: .93rem; line-height: 1.45; text-decoration: none !important; margin: .45rem 0 1.6rem;}
     .article-title:hover, .article-title:focus, .article-title:visited {text-decoration: none !important;}
     .more-list {list-style: none; padding: 0; margin: .35rem 0 1.5rem;}
     .more-list li {padding: .7rem 0; border-bottom: 1px solid #ececea;}
-    .more-title {color: #171717 !important; font-size: .93rem; line-height: 1.5; text-decoration: none !important;}
+    .more-year {font-size: 1.2rem; margin: 1.25rem 0 .15rem;}
+    .more-title {color: #171717 !important; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important; font-size: .93rem; line-height: 1.5; text-decoration: none !important;}
     .more-title:hover, .more-title:focus, .more-title:visited {text-decoration: none !important;}
+    div[data-testid="stButton"] > button {border: 0 !important; background: transparent !important; box-shadow: none !important; padding: .25rem 0 !important; min-height: auto !important; color: #555 !important;}
+    div[data-testid="stButton"] > button:hover {color: #111 !important; background: transparent !important;}
+    div[data-testid="stButton"] > button:focus {box-shadow: none !important;}
     </style>""",
     unsafe_allow_html=True,
 )
@@ -222,12 +228,16 @@ selected_articles = articles[
 
 if not selected_articles.empty:
     for year, year_articles in selected_articles.groupby("연도", sort=False):
-        st.subheader(f"{year}년 {selected_date.month}월 {selected_date.day}일")
+        st.subheader(f"{year}년")
         display_cards(year_articles)
 else:
     st.info(f"{selected_date.month}월 {selected_date.day}일에 등록된 기사가 없습니다.")
 
-if st.toggle("더보기"):
+selected_day_key = f"{selected_date.month:02d}-{selected_date.day:02d}"
+if st.button("> 더보기", key=f"more_{selected_day_key}"):
+    st.session_state["more_open_day"] = selected_day_key
+
+if st.session_state.get("more_open_day") == selected_day_key:
     if not ALL_DATA_PATH.exists():
         st.info("`data/all.xlsx` 파일을 찾을 수 없습니다.")
     else:
@@ -240,6 +250,8 @@ if st.toggle("더보기"):
             if more_articles.empty:
                 st.info(f"{selected_date.month}월 {selected_date.day}의 추가 기사가 없습니다.")
             else:
-                display_title_links(more_articles)
+                for year, year_articles in more_articles.groupby("연도", sort=False):
+                    st.markdown(f'<h3 class="more-year">{year}년</h3>', unsafe_allow_html=True)
+                    display_title_links(year_articles)
         except Exception as exc:
             st.error(f"전체 기사 엑셀 파일을 읽지 못했습니다: {exc}")
