@@ -6,6 +6,7 @@ from datetime import datetime
 from html import escape
 from io import BytesIO
 from pathlib import Path
+import tempfile
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -19,6 +20,11 @@ st.set_page_config(page_title="평범한 날에, 신승호", page_icon="🗓️"
 DATA_PATH = Path(__file__).parent / "data" / "named.xlsx"
 ALL_DATA_PATH = Path(__file__).parent / "data" / "all.xlsx"
 LOGO_PATH = Path(__file__).parent / "data" / "logo.png"
+YUNET_MODEL_PATH = Path(__file__).parent / "data" / "face_detection_yunet_2023mar.onnx"
+YUNET_MODEL_URL = (
+    "https://github.com/opencv/opencv_zoo/raw/main/models/"
+    "face_detection_yunet/face_detection_yunet_2023mar.onnx"
+)
 ARTICLE_COLUMNS = ["날짜", "시간", "매체명", "제목", "url"]
 IMAGE_COLUMN = "대표이미지"
 
@@ -80,15 +86,40 @@ def load_articles(file_bytes: bytes, preferred_sheet: str | None = None) -> pd.D
 
 @st.cache_resource(show_spinner=False)
 def load_face_detector():
-    """Load OpenCV's lightweight frontal-face detector once per app process."""
+    """Load YuNet once, downloading the small official model when necessary."""
     try:
         import cv2
+    except ImportError:
+        return None
 
-        detector = cv2.CascadeClassifier(
-            str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+    try:
+        if YUNET_MODEL_PATH.exists() and YUNET_MODEL_PATH.stat().st_size > 100_000:
+            model_path = YUNET_MODEL_PATH
+        else:
+            model_path = Path(tempfile.gettempdir()) / "face_detection_yunet_2023mar.onnx"
+
+        if not model_path.exists() or model_path.stat().st_size <= 100_000:
+            response = requests.get(
+                YUNET_MODEL_URL,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=(5, 30),
+            )
+            response.raise_for_status()
+            if len(response.content) <= 100_000:
+                return None
+            temporary_path = model_path.with_suffix(".download")
+            temporary_path.write_bytes(response.content)
+            temporary_path.replace(model_path)
+
+        return cv2.FaceDetectorYN.create(
+            str(model_path),
+            "",
+            (320, 320),
+            score_threshold=0.65,
+            nms_threshold=0.3,
+            top_k=1000,
         )
-        return None if detector.empty() else detector
-    except (ImportError, OSError):
+    except (OSError, requests.RequestException, cv2.error):
         return None
 
 
@@ -102,7 +133,7 @@ def face_focused_thumbnail(original: Image.Image) -> Image.Image:
             import cv2
             import numpy as np
 
-            detection_scale = min(1.0, 960 / max(image.width, image.height))
+            detection_scale = min(1.0, 640 / max(image.width, image.height))
             detection_image = image
             if detection_scale < 1.0:
                 detection_image = image.resize(
@@ -114,21 +145,17 @@ def face_focused_thumbnail(original: Image.Image) -> Image.Image:
                 )
 
             rgb = np.asarray(detection_image)
-            gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-            minimum_face = max(24, min(gray.shape[:2]) // 18)
-            faces = detector.detectMultiScale(
-                gray,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(minimum_face, minimum_face),
-            )
+            bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            detector.setInputSize((detection_image.width, detection_image.height))
+            _, faces = detector.detect(bgr)
 
-            if len(faces):
+            if faces is not None and len(faces):
                 detected_face = max(
-                    faces, key=lambda face: int(face[2]) * int(face[3])
+                    faces,
+                    key=lambda face: float(face[2]) * float(face[3]) * float(face[14]),
                 )
                 face_x, face_y, face_width, face_height = (
-                    float(value) / detection_scale for value in detected_face
+                    float(value) / detection_scale for value in detected_face[:4]
                 )
 
                 maximum_crop_height = min(image.height, image.width * 3 / 4)
@@ -158,19 +185,34 @@ def face_focused_thumbnail(original: Image.Image) -> Image.Image:
         except (ImportError, ValueError, TypeError, cv2.error):
             pass
 
-    # If no face is found, preserve the complete photograph inside the same frame.
-    contained = ImageOps.contain(
-        image,
+    # If no face is found, prefer the upper centre where a person's head and
+    # torso usually appear in press photographs.
+    target_ratio = 4 / 3
+    source_ratio = image.width / image.height
+    if source_ratio < target_ratio:
+        crop_width = image.width
+        crop_height = crop_width / target_ratio
+        left = 0
+        top = max(0, (image.height - crop_height) * 0.12)
+    else:
+        crop_height = image.height
+        crop_width = crop_height * target_ratio
+        left = max(0, (image.width - crop_width) / 2)
+        top = 0
+
+    upper_crop = image.crop(
+        (
+            round(left),
+            round(top),
+            round(left + crop_width),
+            round(top + crop_height),
+        )
+    )
+    return ImageOps.fit(
+        upper_crop,
         (480, 360),
         method=Image.Resampling.LANCZOS,
     )
-    thumbnail = Image.new("RGB", (480, 360), color=(244, 244, 240))
-    offset = (
-        (thumbnail.width - contained.width) // 2,
-        (thumbnail.height - contained.height) // 2,
-    )
-    thumbnail.paste(contained, offset)
-    return thumbnail
 
 
 @st.cache_data(persist="disk", show_spinner=False)
