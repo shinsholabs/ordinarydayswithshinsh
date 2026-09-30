@@ -71,11 +71,106 @@ def load_articles(file_bytes: bytes, preferred_sheet: str | None = None) -> pd.D
     articles["시간정렬"] = pd.to_datetime(articles["시간"].astype(str), errors="coerce")
     articles = articles.sort_values(
         ["날짜", "시간정렬", "제목"],
-        ascending=[False, False, False],
+        ascending=[False, True, True],
         na_position="last",
     )
     articles["연도"] = articles["날짜"].dt.year
     return articles
+
+
+@st.cache_resource(show_spinner=False)
+def load_face_detector():
+    """Load OpenCV's lightweight frontal-face detector once per app process."""
+    try:
+        import cv2
+
+        detector = cv2.CascadeClassifier(
+            str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+        )
+        return None if detector.empty() else detector
+    except (ImportError, OSError):
+        return None
+
+
+def face_focused_thumbnail(original: Image.Image) -> Image.Image:
+    """Create a fixed 4:3 thumbnail focused on the largest face and upper body."""
+    image = ImageOps.exif_transpose(original).convert("RGB")
+    detector = load_face_detector()
+
+    if detector is not None:
+        try:
+            import cv2
+            import numpy as np
+
+            detection_scale = min(1.0, 960 / max(image.width, image.height))
+            detection_image = image
+            if detection_scale < 1.0:
+                detection_image = image.resize(
+                    (
+                        max(1, round(image.width * detection_scale)),
+                        max(1, round(image.height * detection_scale)),
+                    ),
+                    Image.Resampling.LANCZOS,
+                )
+
+            rgb = np.asarray(detection_image)
+            gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+            minimum_face = max(24, min(gray.shape[:2]) // 18)
+            faces = detector.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(minimum_face, minimum_face),
+            )
+
+            if len(faces):
+                detected_face = max(
+                    faces, key=lambda face: int(face[2]) * int(face[3])
+                )
+                face_x, face_y, face_width, face_height = (
+                    float(value) / detection_scale for value in detected_face
+                )
+
+                maximum_crop_height = min(image.height, image.width * 3 / 4)
+                crop_height = min(
+                    maximum_crop_height,
+                    max(face_height * 4.5, maximum_crop_height * 0.6),
+                )
+                crop_width = crop_height * 4 / 3
+                face_center_x = face_x + face_width / 2
+                face_center_y = face_y + face_height / 2
+
+                left = max(0.0, min(image.width - crop_width, face_center_x - crop_width / 2))
+                top = max(0.0, min(image.height - crop_height, face_center_y - crop_height * 0.30))
+                crop = image.crop(
+                    (
+                        round(left),
+                        round(top),
+                        round(left + crop_width),
+                        round(top + crop_height),
+                    )
+                )
+                return ImageOps.fit(
+                    crop,
+                    (480, 360),
+                    method=Image.Resampling.LANCZOS,
+                )
+        except (ImportError, ValueError, TypeError, cv2.error):
+            pass
+
+    # If no face is found, preserve the complete photograph inside the same frame.
+    contained = ImageOps.contain(
+        image,
+        (480, 360),
+        method=Image.Resampling.LANCZOS,
+    )
+    thumbnail = Image.new("RGB", (480, 360), color=(244, 244, 240))
+    offset = (
+        (thumbnail.width - contained.width) // 2,
+        (thumbnail.height - contained.height) // 2,
+    )
+    thumbnail.paste(contained, offset)
+    return thumbnail
 
 
 @st.cache_data(persist="disk", show_spinner=False)
@@ -101,18 +196,7 @@ def thumbnail_data_uri(image_url: str, article_url: str) -> str | None:
             chunks.append(chunk)
 
         with Image.open(BytesIO(b"".join(chunks))) as original:
-            # Preserve the whole photograph instead of cropping around its centre.
-            contained = ImageOps.contain(
-                original.convert("RGB"),
-                (480, 360),
-                method=Image.Resampling.LANCZOS,
-            )
-            image = Image.new("RGB", (480, 360), color=(244, 244, 240))
-            offset = (
-                (image.width - contained.width) // 2,
-                (image.height - contained.height) // 2,
-            )
-            image.paste(contained, offset)
+            image = face_focused_thumbnail(original)
             output = BytesIO()
             image.save(output, format="WEBP", quality=72, method=6)
         encoded = base64.b64encode(output.getvalue()).decode("ascii")
@@ -193,7 +277,7 @@ st.markdown(
     .article-list li {padding: .62rem 0; border-bottom: 1px solid #ececea;}
     .photo-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; align-items: start; margin-bottom: 1.45rem;}
     .photo-card {min-width: 0;}
-    .article-image img, .no-image {width: 100%; aspect-ratio: 4 / 3; object-fit: contain; display: block; border-radius: 8px; background: #f4f4f0;}
+    .article-image img, .no-image {width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; border-radius: 8px; background: #f4f4f0;}
     .no-image {display: grid; place-items: center; color: #777 !important; padding: 1rem; text-align: center; font-size: .8rem;}
     .article-title {display: block; color: #171717 !important; font-size: 1.02rem; font-weight: 400; line-height: 1.48; text-decoration: none !important;}
     .article-title:hover, .article-title:focus, .article-title:visited {text-decoration: none !important;}
