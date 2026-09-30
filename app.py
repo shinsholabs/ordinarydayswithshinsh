@@ -20,11 +20,6 @@ st.set_page_config(page_title="평범한 날에, 신승호", page_icon="🗓️"
 DATA_PATH = Path(__file__).parent / "data" / "named.xlsx"
 ALL_DATA_PATH = Path(__file__).parent / "data" / "all.xlsx"
 LOGO_PATH = Path(__file__).parent / "data" / "logo.png"
-YUNET_MODEL_PATH = Path(__file__).parent / "data" / "face_detection_yunet_2023mar.onnx"
-YUNET_MODEL_URL = (
-    "https://github.com/opencv/opencv_zoo/raw/main/models/"
-    "face_detection_yunet/face_detection_yunet_2023mar.onnx"
-)
 ARTICLE_COLUMNS = ["날짜", "시간", "매체명", "제목", "url"]
 IMAGE_COLUMN = "대표이미지"
 
@@ -86,40 +81,21 @@ def load_articles(file_bytes: bytes, preferred_sheet: str | None = None) -> pd.D
 
 @st.cache_resource(show_spinner=False)
 def load_face_detector():
-    """Load YuNet once, downloading the small official model when necessary."""
+    """Load InsightFace's SCRFD detector once per app process."""
     try:
-        import cv2
-    except ImportError:
-        return None
+        from insightface.app import FaceAnalysis
 
-    try:
-        if YUNET_MODEL_PATH.exists() and YUNET_MODEL_PATH.stat().st_size > 100_000:
-            model_path = YUNET_MODEL_PATH
-        else:
-            model_path = Path(tempfile.gettempdir()) / "face_detection_yunet_2023mar.onnx"
-
-        if not model_path.exists() or model_path.stat().st_size <= 100_000:
-            response = requests.get(
-                YUNET_MODEL_URL,
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=(5, 30),
-            )
-            response.raise_for_status()
-            if len(response.content) <= 100_000:
-                return None
-            temporary_path = model_path.with_suffix(".download")
-            temporary_path.write_bytes(response.content)
-            temporary_path.replace(model_path)
-
-        return cv2.FaceDetectorYN.create(
-            str(model_path),
-            "",
-            (320, 320),
-            score_threshold=0.65,
-            nms_threshold=0.3,
-            top_k=1000,
+        model_root = Path(tempfile.gettempdir()) / "shin_seungho_insightface"
+        model_root.mkdir(parents=True, exist_ok=True)
+        detector = FaceAnalysis(
+            name="buffalo_sc",
+            root=str(model_root),
+            allowed_modules=["detection"],
+            providers=["CPUExecutionProvider"],
         )
-    except (OSError, requests.RequestException, cv2.error):
+        detector.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.5)
+        return detector
+    except Exception:
         return None
 
 
@@ -133,7 +109,7 @@ def face_focused_thumbnail(original: Image.Image) -> Image.Image:
             import cv2
             import numpy as np
 
-            detection_scale = min(1.0, 640 / max(image.width, image.height))
+            detection_scale = min(1.0, 960 / max(image.width, image.height))
             detection_image = image
             if detection_scale < 1.0:
                 detection_image = image.resize(
@@ -146,17 +122,39 @@ def face_focused_thumbnail(original: Image.Image) -> Image.Image:
 
             rgb = np.asarray(detection_image)
             bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-            detector.setInputSize((detection_image.width, detection_image.height))
-            _, faces = detector.detect(bgr)
+            faces = detector.get(bgr, max_num=0)
 
-            if faces is not None and len(faces):
+            if faces:
+                image_center_x = detection_image.width / 2
+                image_center_y = detection_image.height * 0.38
+                image_area = detection_image.width * detection_image.height
+
+                def face_priority(face) -> float:
+                    x1, y1, x2, y2 = (float(value) for value in face.bbox)
+                    width = max(1.0, x2 - x1)
+                    height = max(1.0, y2 - y1)
+                    center_x = (x1 + x2) / 2
+                    center_y = (y1 + y2) / 2
+                    distance = (
+                        ((center_x - image_center_x) / detection_image.width) ** 2
+                        + ((center_y - image_center_y) / detection_image.height) ** 2
+                    ) ** 0.5
+                    centre_score = max(0.0, 1.0 - distance / 0.71)
+                    size_score = min(1.0, ((width * height) / image_area) ** 0.5 * 6)
+                    confidence = float(getattr(face, "det_score", 0.5))
+                    return centre_score * 0.65 + size_score * 0.20 + confidence * 0.15
+
                 detected_face = max(
                     faces,
-                    key=lambda face: float(face[2]) * float(face[3]) * float(face[14]),
+                    key=face_priority,
                 )
-                face_x, face_y, face_width, face_height = (
-                    float(value) / detection_scale for value in detected_face[:4]
+                x1, y1, x2, y2 = (
+                    float(value) / detection_scale for value in detected_face.bbox
                 )
+                face_x = x1
+                face_y = y1
+                face_width = max(1.0, x2 - x1)
+                face_height = max(1.0, y2 - y1)
 
                 maximum_crop_height = min(image.height, image.width * 3 / 4)
                 crop_height = min(
@@ -182,7 +180,7 @@ def face_focused_thumbnail(original: Image.Image) -> Image.Image:
                     (480, 360),
                     method=Image.Resampling.LANCZOS,
                 )
-        except (ImportError, ValueError, TypeError, cv2.error):
+        except (ImportError, ValueError, TypeError, AttributeError, cv2.error):
             pass
 
     # If no face is found, prefer the upper centre where a person's head and
