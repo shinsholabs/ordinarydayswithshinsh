@@ -77,7 +77,7 @@ def load_articles(file_bytes: bytes, preferred_sheet: str | None = None) -> pd.D
     articles["시간정렬"] = pd.to_datetime(articles["시간"].astype(str), errors="coerce")
     articles = articles.sort_values(
         ["날짜", "시간정렬", "제목"],
-        ascending=[False, True, True],
+        ascending=[False, False, False],
         na_position="last",
     )
     articles["연도"] = articles["날짜"].dt.year
@@ -262,16 +262,12 @@ def card_image_source(article_url: str, preferred_image_url: str = "") -> str | 
     return None
 
 
-def display_article_group(articles: pd.DataFrame) -> None:
-    title_links = []
-    photos = []
+def display_cards(articles: pd.DataFrame) -> None:
+    cards = []
     for _, article in articles.iterrows():
         image_url = card_image_source(article["url"], article.get(IMAGE_COLUMN, ""))
         safe_url = escape(str(article["url"]), quote=True)
         safe_title = escape(str(article["제목"]), quote=True)
-        title_links.append(
-            f'<li><a class="article-title" href="{safe_url}" target="_blank">{safe_title}</a></li>'
-        )
         if image_url:
             image = (
                 f'<a class="article-image" href="{safe_url}" target="_blank">'
@@ -279,12 +275,12 @@ def display_article_group(articles: pd.DataFrame) -> None:
             )
         else:
             image = f'<a class="no-image" href="{safe_url}" target="_blank">사진을 불러올 수 없습니다</a>'
-        photos.append(f'<div class="photo-card">{image}</div>')
-    st.markdown(
-        f'<ul class="article-list">{"".join(title_links)}</ul>'
-        f'<section class="photo-grid">{"".join(photos)}</section>',
-        unsafe_allow_html=True,
-    )
+        cards.append(
+            f'<article class="article-card">'
+            f'<a class="article-title" href="{safe_url}" target="_blank">{safe_title}</a>'
+            f'{image}</article>'
+        )
+    st.markdown(f'<section class="article-grid">{"".join(cards)}</section>', unsafe_allow_html=True)
 
 
 def display_title_links(articles: pd.DataFrame) -> None:
@@ -315,13 +311,11 @@ st.markdown(
     div[data-testid="stNumberInput"] button:last-of-type svg {display: none;}
     div[data-testid="stNumberInput"] button:first-of-type::before {content: "◀"; font-size: .65rem;}
     div[data-testid="stNumberInput"] button:last-of-type::before {content: "▶"; font-size: .65rem;}
-    .article-list {list-style: none; padding: 0; margin: 0 0 1.1rem;}
-    .article-list li {padding: .62rem 0; border-bottom: 1px solid #ececea;}
-    .photo-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; align-items: start; margin-bottom: 1.45rem;}
-    .photo-card {min-width: 0;}
+    .article-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; align-items: start;}
+    .article-card {min-width: 0; margin-bottom: 1.45rem;}
     .article-image img, .no-image {width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; border-radius: 8px; background: #f4f4f0;}
     .no-image {display: grid; place-items: center; color: #777 !important; padding: 1rem; text-align: center; font-size: .8rem;}
-    .article-title {display: block; color: #171717 !important; font-size: 1.02rem; font-weight: 400; line-height: 1.48; text-decoration: none !important;}
+    .article-title {display: block; min-height: 3.1em; color: #171717 !important; font-size: 1.02rem; font-weight: 400; line-height: 1.48; text-decoration: none !important; margin: 0 0 .55rem;}
     .article-title:hover, .article-title:focus, .article-title:visited {text-decoration: none !important;}
     .year-heading {font-size: 1.18rem; font-weight: 700; letter-spacing: -.025em; margin: 1.55rem 0 .7rem;}
     .more-list {list-style: none; padding: 0; margin: .35rem 0 1.5rem;}
@@ -389,7 +383,7 @@ if not selected_articles.empty:
             f'<h2 class="year-heading">{year}</h2>',
             unsafe_allow_html=True,
         )
-        display_article_group(year_articles)
+        display_cards(year_articles)
 else:
     st.info(f"{selected_month}월 {selected_day}일에 등록된 기사가 없습니다.")
 
