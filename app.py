@@ -129,12 +129,16 @@ def card_image_source(article_url: str, preferred_image_url: str = "") -> str | 
     return None
 
 
-def display_cards(articles: pd.DataFrame) -> None:
-    cards = []
+def display_article_group(articles: pd.DataFrame) -> None:
+    title_links = []
+    photos = []
     for _, article in articles.iterrows():
         image_url = card_image_source(article["url"], article.get(IMAGE_COLUMN, ""))
         safe_url = escape(str(article["url"]), quote=True)
         safe_title = escape(str(article["제목"]), quote=True)
+        title_links.append(
+            f'<li><a class="article-title" href="{safe_url}" target="_blank">{safe_title}</a></li>'
+        )
         if image_url:
             image = (
                 f'<a class="article-image" href="{safe_url}" target="_blank">'
@@ -142,12 +146,12 @@ def display_cards(articles: pd.DataFrame) -> None:
             )
         else:
             image = f'<a class="no-image" href="{safe_url}" target="_blank">사진을 불러올 수 없습니다</a>'
-        cards.append(
-            f'<article class="article-card">'
-            f'<a class="article-title" href="{safe_url}" target="_blank">{safe_title}</a>'
-            f'{image}</article>'
-        )
-    st.markdown(f'<section class="article-grid">{"".join(cards)}</section>', unsafe_allow_html=True)
+        photos.append(f'<div class="photo-card">{image}</div>')
+    st.markdown(
+        f'<ul class="article-list">{"".join(title_links)}</ul>'
+        f'<section class="photo-grid">{"".join(photos)}</section>',
+        unsafe_allow_html=True,
+    )
 
 
 def display_title_links(articles: pd.DataFrame) -> None:
@@ -167,17 +171,17 @@ st.markdown(
     .site-title {font-size: 1.72rem; font-weight: 700; letter-spacing: -.055em; line-height: 1.15; margin: 0;}
     .site-subtitle {font-size: 1.08rem; color: #707070; margin: .08rem 0 1.3rem; line-height: 1.18; letter-spacing: .01em;}
     .date-picker-title {font-size: .9rem; font-weight: 650; color: #4c4c4c; margin: .15rem 0 .15rem;}
-    div[data-testid="stSelectbox"] {margin-bottom: .35rem;}
-    div[data-testid="stSelectbox"] > label {display: none;}
-    div[data-baseweb="select"] > div {border-radius: 14px; border-color: #eadfda; background: #fffaf8;}
-    .article-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; align-items: start;}
-    .article-card {min-width: 0; margin-bottom: 1.45rem;}
+    div[data-testid="stNumberInput"] {margin-bottom: .35rem;}
+    div[data-testid="stNumberInput"] input {border-color: #eadfda; background: #fffaf8;}
+    .article-list {list-style: none; padding: 0; margin: 0 0 1.1rem;}
+    .article-list li {padding: .62rem 0; border-bottom: 1px solid #ececea;}
+    .photo-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; align-items: start; margin-bottom: 1.45rem;}
+    .photo-card {min-width: 0;}
     .article-image img, .no-image {width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; border-radius: 8px; background: #efefeb;}
     .no-image {display: grid; place-items: center; color: #777 !important; padding: 1rem; text-align: center; font-size: .8rem;}
-    .article-title {display: block; min-height: 3.1em; color: #171717 !important; font-size: 1.02rem; font-weight: 650; line-height: 1.48; text-decoration: none !important; margin: 0 0 .55rem;}
+    .article-title {display: block; color: #171717 !important; font-size: 1.02rem; font-weight: 650; line-height: 1.48; text-decoration: none !important;}
     .article-title:hover, .article-title:focus, .article-title:visited {text-decoration: none !important;}
     .year-heading {font-size: 1.18rem; font-weight: 700; letter-spacing: -.025em; margin: 1.55rem 0 .7rem;}
-    .year-emoji {font-size: .92em; margin-right: .38rem;}
     .more-list {list-style: none; padding: 0; margin: .35rem 0 1.5rem;}
     .more-list li {padding: .7rem 0; border-bottom: 1px solid #ececea;}
     .more-year {font-size: 1.08rem; margin: 1.25rem 0 .15rem;}
@@ -208,28 +212,28 @@ if "selected_month" not in st.session_state:
 if "selected_day" not in st.session_state:
     st.session_state["selected_day"] = today_kst.day
 
-st.markdown('<p class="date-picker-title">🗓️ 오늘 꺼내 볼 날짜</p>', unsafe_allow_html=True)
+st.markdown('<p class="date-picker-title">날짜 선택</p>', unsafe_allow_html=True)
 month_column, day_column = st.columns(2)
 with month_column:
-    selected_month = st.selectbox(
+    selected_month = int(st.number_input(
         "월",
-        options=list(range(1, 13)),
+        min_value=1,
+        max_value=12,
+        step=1,
         key="selected_month",
-        format_func=lambda month: f"🌷 {month}월",
-        label_visibility="collapsed",
-    )
+    ))
 
 maximum_day = calendar.monthrange(2024, selected_month)[1]
 if st.session_state["selected_day"] > maximum_day:
     st.session_state["selected_day"] = maximum_day
 with day_column:
-    selected_day = st.selectbox(
+    selected_day = int(st.number_input(
         "일",
-        options=list(range(1, maximum_day + 1)),
+        min_value=1,
+        max_value=maximum_day,
+        step=1,
         key="selected_day",
-        format_func=lambda day: f"{day}일 ☁️",
-        label_visibility="collapsed",
-    )
+    ))
 
 selected_articles = articles[
     (articles["날짜"].dt.month == selected_month)
@@ -239,10 +243,10 @@ selected_articles = articles[
 if not selected_articles.empty:
     for year, year_articles in selected_articles.groupby("연도", sort=False):
         st.markdown(
-            f'<h2 class="year-heading"><span class="year-emoji">🐯</span>{year}</h2>',
+            f'<h2 class="year-heading">{year}</h2>',
             unsafe_allow_html=True,
         )
-        display_cards(year_articles)
+        display_article_group(year_articles)
 else:
     st.info(f"{selected_month}월 {selected_day}일에 등록된 기사가 없습니다.")
 
@@ -265,7 +269,7 @@ if st.session_state.get("more_open_day") == selected_day_key:
             else:
                 for year, year_articles in more_articles.groupby("연도", sort=False):
                     st.markdown(
-                        f'<h3 class="more-year"><span class="year-emoji">🐯</span>{year}</h3>',
+                        f'<h3 class="more-year">{year}</h3>',
                         unsafe_allow_html=True,
                     )
                     display_title_links(year_articles)
