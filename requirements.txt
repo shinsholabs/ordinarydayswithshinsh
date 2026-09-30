@@ -2,4 +2,4 @@ streamlit>=1.39
 pandas>=2.1
 openpyxl>=3.1
 requests>=2.31
-beautifulsoup4>=4.12
+Pillow>=10.0
