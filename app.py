@@ -101,11 +101,18 @@ def thumbnail_data_uri(image_url: str, article_url: str) -> str | None:
             chunks.append(chunk)
 
         with Image.open(BytesIO(b"".join(chunks))) as original:
-            image = ImageOps.fit(
+            # Preserve the whole photograph instead of cropping around its centre.
+            contained = ImageOps.contain(
                 original.convert("RGB"),
-                (360, 360),
+                (480, 360),
                 method=Image.Resampling.LANCZOS,
             )
+            image = Image.new("RGB", (480, 360), color=(244, 244, 240))
+            offset = (
+                (image.width - contained.width) // 2,
+                (image.height - contained.height) // 2,
+            )
+            image.paste(contained, offset)
             output = BytesIO()
             image.save(output, format="WEBP", quality=72, method=6)
         encoded = base64.b64encode(output.getvalue()).decode("ascii")
@@ -170,16 +177,25 @@ st.markdown(
     .block-container {max-width: 760px; padding-top: 2.2rem; padding-bottom: 4rem;}
     .site-title {font-size: 1.72rem; font-weight: 700; letter-spacing: -.055em; line-height: 1.15; margin: 0;}
     .site-subtitle {font-size: 1.08rem; color: #707070; margin: .08rem 0 1.3rem; line-height: 1.18; letter-spacing: .01em;}
-    .date-picker-title {font-size: .9rem; font-weight: 650; color: #4c4c4c; margin: .15rem 0 .15rem;}
-    div[data-testid="stNumberInput"] {margin-bottom: .35rem;}
+    div[data-testid="stHorizontalBlock"] {flex-wrap: nowrap !important; gap: .55rem;}
+    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {min-width: 0 !important; width: calc(50% - .275rem) !important; flex: 1 1 0 !important;}
+    div[data-testid="stNumberInput"] {max-width: 9rem; margin-bottom: .35rem;}
     div[data-testid="stNumberInput"] input {border-color: #eadfda; background: #fffaf8;}
+    button[data-testid="stNumberInputStepDown"] svg,
+    button[data-testid="stNumberInputStepUp"] svg {display: none;}
+    button[data-testid="stNumberInputStepDown"]::before {content: "◀"; font-size: .65rem;}
+    button[data-testid="stNumberInputStepUp"]::before {content: "▶"; font-size: .65rem;}
+    div[data-testid="stNumberInput"] button:first-of-type svg,
+    div[data-testid="stNumberInput"] button:last-of-type svg {display: none;}
+    div[data-testid="stNumberInput"] button:first-of-type::before {content: "◀"; font-size: .65rem;}
+    div[data-testid="stNumberInput"] button:last-of-type::before {content: "▶"; font-size: .65rem;}
     .article-list {list-style: none; padding: 0; margin: 0 0 1.1rem;}
     .article-list li {padding: .62rem 0; border-bottom: 1px solid #ececea;}
     .photo-grid {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; align-items: start; margin-bottom: 1.45rem;}
     .photo-card {min-width: 0;}
-    .article-image img, .no-image {width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; border-radius: 8px; background: #efefeb;}
+    .article-image img, .no-image {width: 100%; aspect-ratio: 4 / 3; object-fit: contain; display: block; border-radius: 8px; background: #f4f4f0;}
     .no-image {display: grid; place-items: center; color: #777 !important; padding: 1rem; text-align: center; font-size: .8rem;}
-    .article-title {display: block; color: #171717 !important; font-size: 1.02rem; font-weight: 650; line-height: 1.48; text-decoration: none !important;}
+    .article-title {display: block; color: #171717 !important; font-size: 1.02rem; font-weight: 400; line-height: 1.48; text-decoration: none !important;}
     .article-title:hover, .article-title:focus, .article-title:visited {text-decoration: none !important;}
     .year-heading {font-size: 1.18rem; font-weight: 700; letter-spacing: -.025em; margin: 1.55rem 0 .7rem;}
     .more-list {list-style: none; padding: 0; margin: .35rem 0 1.5rem;}
@@ -207,12 +223,13 @@ except Exception as exc:
     st.stop()
 
 today_kst = datetime.now(ZoneInfo("Asia/Seoul")).date()
-if "selected_month" not in st.session_state:
-    st.session_state["selected_month"] = today_kst.month
-if "selected_day" not in st.session_state:
-    st.session_state["selected_day"] = today_kst.day
+month_state_key = "selected_month_v16"
+day_state_key = "selected_day_v16"
+if month_state_key not in st.session_state:
+    st.session_state[month_state_key] = today_kst.month
+if day_state_key not in st.session_state:
+    st.session_state[day_state_key] = today_kst.day
 
-st.markdown('<p class="date-picker-title">날짜 선택</p>', unsafe_allow_html=True)
 month_column, day_column = st.columns(2)
 with month_column:
     selected_month = int(st.number_input(
@@ -220,19 +237,19 @@ with month_column:
         min_value=1,
         max_value=12,
         step=1,
-        key="selected_month",
+        key=month_state_key,
     ))
 
 maximum_day = calendar.monthrange(2024, selected_month)[1]
-if st.session_state["selected_day"] > maximum_day:
-    st.session_state["selected_day"] = maximum_day
+if st.session_state[day_state_key] > maximum_day:
+    st.session_state[day_state_key] = maximum_day
 with day_column:
     selected_day = int(st.number_input(
         "일",
         min_value=1,
         max_value=maximum_day,
         step=1,
-        key="selected_day",
+        key=day_state_key,
     ))
 
 selected_articles = articles[
