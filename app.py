@@ -398,6 +398,9 @@ if st.session_state.get("more_open_day") == selected_day_key:
             more_articles = all_articles[
                 (all_articles["날짜"].dt.month == selected_month)
                 & (all_articles["날짜"].dt.day == selected_day)
+                & ~all_articles["제목"].astype(str).str.contains(
+                    "신승호", regex=False, na=False
+                )
             ]
             if more_articles.empty:
                 st.info(f"{selected_month}월 {selected_day}일의 추가 기사가 없습니다.")
