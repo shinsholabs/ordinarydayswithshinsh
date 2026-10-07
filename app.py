@@ -8,6 +8,7 @@ from io import BytesIO
 from pathlib import Path
 import tempfile
 from zoneinfo import ZoneInfo
+from visitor_tracker import record_visit_once
 
 import pandas as pd
 import requests
