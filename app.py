@@ -17,7 +17,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 
 st.set_page_config(page_title="평범한 날에, 신승호", page_icon="🗓️", layout="centered")
-
+record_visit_once()
 DATA_PATH = Path(__file__).parent / "data" / "named.xlsx"
 ALL_DATA_PATH = Path(__file__).parent / "data" / "all.xlsx"
 LOGO_PATH = Path(__file__).parent / "data" / "logo.png"
